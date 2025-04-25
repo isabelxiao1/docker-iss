@@ -1,20 +1,15 @@
 import requests
-import json
-import datetime
 import logging
 import os
 from pymongo import MongoClient
 
 """
-    This script is used to get the current location of the ISS from the Open Notify API 
-      and write it to a MongoDB database.
-    The script is containerized and can be run anywhere.
-    Note that (a) an entrypoint function is defined in this script, and that (b) error handling
-      and (c) logging are implemented.
+    This script fetches artist data from the MusicBrainz API
+    and writes it to a MongoDB database.
 
     YOU MUST update two things before running this script:
-    1. Populate a MONGOPASS environment variable with your MongoDB password (see Canvas).
-    2. Update the db name to your UVA computing ID on line 68.
+    1. Populate a MONGOPASS environment variable with your MongoDB password.
+    2. Update the db name to your UVA computing ID on line 60.
 """
 
 # logging config
@@ -22,57 +17,53 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # core fcn
-def get_iss_location():
-    url = "http://api.open-notify.org/iss-now.json"
+def get_musicbrainz_artists():
+    url = "https://musicbrainz.org/ws/2/artist/?query=nirvana&fmt=json"
+    headers = {
+    'User-Agent': 'docker-iss/1.0 (jcs3qy@virginia.edu)'
+    }
     try:
-        response = requests.get(url)
+        response = requests.get(url, headers=headers)
         r = response.json()
 
-        # fetch values from response
-        timestamp = r['timestamp']
-        # convert timestamp to human readable date and time (out of epoch)
-        dt_obj = datetime.datetime.fromtimestamp(timestamp)
-        dtime = dt_obj.strftime('%Y-%m-%d-%H:%M:%S')
+        artists = r.get("artists", [])
 
-        # get longitude and latitude
-        long = r['iss_position']['longitude']
-        lat = r['iss_position']['latitude']
+        if not artists:
+            logger.warning("No artist data found.")
+            return
 
-        # log output for visibility
-        logger.info("Timestamp: " + dtime)
-        logger.info("Longitude: " + long)
-        logger.info("Latitude: " + lat)
+        for artist in artists:
+            name = artist.get("name")
+            country = artist.get("country", "N/A")
+            disambiguation = artist.get("disambiguation", "N/A")
 
-        # write output to mongo db
-        write_to_mongo(dtime, long, lat)
+            logger.info(f"Artist: {name} | Country: {country} | Disambiguation: {disambiguation}")
+            write_to_mongo(name, country, disambiguation)
 
     except Exception as e:
-        logger.error(e)
+        logger.error(f"Failed to fetch data from MusicBrainz API: {e}")
         exit(1)
 
 # db utility fcn
-def write_to_mongo(dtime, long, lat):
-    # write output to mongo db
+def write_to_mongo(name, country, disambiguation):
     try:
-        # use an ENV variable for the password
         dbpass = os.getenv('MONGOPASS')
         if not dbpass:
             raise ValueError("MONGOPASS environment variable is not set")
-            logging.error("MONGOPASS environment variable is not set")
-            exit(1)
-            
+
         connection_string = f'mongodb+srv://docker:{dbpass}@cluster0.m3fek.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0'
         client = MongoClient(connection_string)
 
         # use your UVA computing ID for the database name
-        db = client['mst3k']
-        collection = db['locations']
-        collection.insert_one({'timestamp': dtime, 'longitude': long, 'latitude': lat})
-        logger.info('Output written to MongoDB')
+        db = client['jcs3qy']
+        collection = db['music_artists']
+        collection.insert_one({'name': name, 'country': country, 'disambiguation': disambiguation})
+        logger.info(f"Inserted {name} into MongoDB.")
+
     except Exception as e:
-        logger.error(e)
+        logger.error(f"MongoDB write error: {e}")
         exit(1)
 
 # entrypoint fcn
 if __name__ == "__main__":
-    get_iss_location()
+    get_musicbrainz_artists()
